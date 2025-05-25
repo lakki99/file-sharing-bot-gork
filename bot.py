@@ -1,12 +1,12 @@
 import os
 import asyncio
-import aiosqlite
 import random
 import string
 import requests
 from datetime import datetime
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pymongo import MongoClient
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -16,37 +16,49 @@ ADMIN_IDS = [int(id) for id in os.getenv("ADMIN_IDS").split(",")]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID"))
 DOMAIN = os.getenv("DOMAIN")
-TINYURL_API = os.getenv("TINYURL_API", "")
+SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
+SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
+MONGO_URL = os.getenv("MONGO_URL")
 
 # Initialize Pyrogram client
 app = Client("file_sharing_bot", bot_token=BOT_TOKEN)
 
-# Initialize SQLite database
-async def init_db():
-    async with aiosqlite.connect("database.db") as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS content (
-                shortlink TEXT PRIMARY KEY,
-                message_id INTEGER,
-                uploader_id INTEGER,
-                upload_time TEXT,
-                is_batch INTEGER DEFAULT 0,
-                batch_first_id INTEGER,
-                batch_last_id INTEGER
-            )
-        """)
-        await db.commit()
+# Initialize MongoDB client
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client["file_sharing_bot"]
+content_collection = db["content"]
 
 # Generate random shortlink (e.g., abc123)
 def generate_shortlink():
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
-# Generate TinyURL shortlink
-def create_tinyurl(long_url):
+# Generate shortener link based on service
+def create_shortener_link(long_url):
     try:
-        response = requests.get(f"https://tinyurl.com/api-create.php?url={long_url}")
-        return response.text if response.status_code == 200 else long_url
-    except Exception:
+        if SHORTENER_SERVICE == "rebrandly":
+            url = "https://api.rebrandly.com/v1/links"
+            headers = {"Authorization": f"Bearer {SHORTENER_API_KEY}", "Content-Type": "application/json"}
+            data = {"destination": long_url}
+            response = requests.post(url, json=data, headers=headers)
+            return response.json().get("shortUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "shortio":
+            url = f"https://api.short.io/links"
+            headers = {"Authorization": SHORTENER_API_KEY, "Content-Type": "application/json"}
+            data = {"domain": "yourdomain.short.io", "originalURL": long_url}
+            response = requests.post(url, json=data, headers=headers)
+            return response.json().get("shortURL", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "cuttly":
+            url = f"https://cutt.ly/api/api.php?key={SHORTENER_API_KEY}&short={long_url}"
+            response = requests.get(url)
+            return response.json().get("url", {}).get("shortLink", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "tinyurl":
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}").text
+        elif SHORTENER_SERVICE == "rbgy":
+            return requests.get(f"https://rb.gy/api/shorten?url={long_url}").text
+        else:
+            return long_url
+    except Exception as e:
+        print(f"Error with {SHORTENER_SERVICE}: {e}")
         return long_url
 
 # Check if user is admin
@@ -76,18 +88,19 @@ async def link_command(client, message):
         db_message = await message.forward(DB_CHANNEL_ID)
         shortlink = generate_shortlink()
         bot_link = f"{DOMAIN}/{shortlink}"
-        tinyurl_link = create_tinyurl(bot_link)
+        shortener_link = create_shortener_link(bot_link)
         
-        async with aiosqlite.connect("database.db") as db:
-            await db.execute(
-                "INSERT INTO content (shortlink, message_id, uploader_id, upload_time) VALUES (?, ?, ?, ?)",
-                (shortlink, db_message.id, user_id, datetime.now().isoformat())
-            )
-            await db.commit()
+        content_collection.insert_one({
+            "shortlink": shortlink,
+            "message_id": db_message.id,
+            "uploader_id": user_id,
+            "upload_time": datetime.now().isoformat(),
+            "is_batch": 0
+        })
         
         await message.reply_text(
-            f"Content saved! Shareable link: {tinyurl_link}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=tinyurl_link)]])
+            f"Content saved! Shareable link: {shortener_link}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=shortener_link)]])
         )
         await log_event(f"Content uploaded by {user_id}: {shortlink}")
     except Exception as e:
@@ -117,7 +130,7 @@ async def batch_command(client, message):
         # Forward messages in range to database channel
         shortlink = generate_shortlink()
         bot_link = f"{DOMAIN}/{shortlink}"
-        tinyurl_link = create_tinyurl(bot_link)
+        shortener_link = create_shortener_link(bot_link)
         
         for msg_id in range(first_id, last_id + 1):
             try:
@@ -125,16 +138,18 @@ async def batch_command(client, message):
             except Exception:
                 continue
         
-        async with aiosqlite.connect("database.db") as db:
-            await db.execute(
-                "INSERT INTO content (shortlink, batch_first_id, batch_last_id, uploader_id, upload_time, is_batch) VALUES (?, ?, ?, ?, ?, ?)",
-                (shortlink, first_id, last_id, user_id, datetime.now().isoformat(), 1)
-            )
-            await db.commit()
+        content_collection.insert_one({
+            "shortlink": shortlink,
+            "batch_first_id": first_id,
+            "batch_last_id": last_id,
+            "uploader_id": user_id,
+            "upload_time": datetime.now().isoformat(),
+            "is_batch": 1
+        })
         
         await message.reply_text(
-            f"Batch saved! Shareable link: {tinyurl_link}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=tinyurl_link)]])
+            f"Batch saved! Shareable link: {shortener_link}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Open Link", url=shortener_link)]])
         )
         await log_event(f"Batch uploaded by {user_id}: {shortlink} (Messages {first_id}-{last_id})")
     except Exception as e:
@@ -162,20 +177,19 @@ async def list_content(client, message):
     if not is_admin(message.from_user.id):
         await message.reply_text("Admins only!")
         return
-    async with aiosqlite.connect("database.db") as db:
-        async with db.execute("SELECT shortlink, message_id, batch_first_id, batch_last_id, uploader_id, upload_time, is_batch FROM content") as cursor:
-            items = await cursor.fetchall()
-            if not items:
-                await message.reply_text("No content stored!")
-                return
-            response = "Stored Content:\n"
-            for shortlink, msg_id, first_id, last_id, uploader_id, upload_time, is_batch in items:
-                link = create_tinyurl(f"{DOMAIN}/{shortlink}")
-                if is_batch:
-                    response += f"Batch: {shortlink}\nMessages: {first_id}-{last_id}\nUploader: {uploader_id}\nUploaded: {upload_time}\nLink: {link}\n\n"
-                else:
-                    response += f"Content: {shortlink}\nMessage ID: {msg_id}\nUploader: {uploader_id}\nUploaded: {upload_time}\nLink: {link}\n\n"
-            await message.reply_text(response)
+    items = content_collection.find()
+    if not items.count():
+        await message.reply_text("No content stored!")
+        return
+    response = "Stored Content:\n"
+    for item in items:
+        bot_link = f"{DOMAIN}/{item['shortlink']}"
+        shortener_link = create_shortener_link(bot_link)
+        if item["is_batch"]:
+            response += f"Batch: {item['shortlink']}\nMessages: {item['batch_first_id']}-{item['batch_last_id']}\nUploader: {item['uploader_id']}\nUploaded: {item['upload_time']}\nLink: {shortener_link}\n\n"
+        else:
+            response += f"Content: {item['shortlink']}\nMessage ID: {item['message_id']}\nUploader: {item['uploader_id']}\nUploaded: {item['upload_time']}\nLink: {shortener_link}\n\n"
+    await message.reply_text(response)
 
 # List allowed users
 @app.on_message(filters.command("list_users") & filters.private)
@@ -195,8 +209,8 @@ async def add_user(client, message):
         user_id = int(message.text.split()[1])
         if user_id not in ADMIN_IDS:
             ADMIN_IDS.append(user_id)
-            with open(".env", "a") as f:
-                f.write(f"\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}")
+            with open(".env", "w") as f:
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} added as admin!")
             await log_event(f"User {user_id} added as admin by {message.from_user.id}")
         else:
@@ -216,7 +230,7 @@ async def remove_user(client, message):
         if user_id in ADMIN_IDS:
             ADMIN_IDS.remove(user_id)
             with open(".env", "w") as f:
-                f.write(f"BOT_TOKEN={BOT_TOKEN}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nTINYURL_API={TINYURL_API}")
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} removed from admins!")
             await log_event(f"User {user_id} removed from admins by {message.from_user.id}")
         else:
@@ -233,14 +247,12 @@ async def broadcast(client, message):
         return
     try:
         msg = message.text.split(maxsplit=1)[1]
-        async with aiosqlite.connect("database.db") as db:
-            async with db.execute("SELECT DISTINCT uploader_id FROM content") as cursor:
-                users = await cursor.fetchall()
-                for user_id in users:
-                    try:
-                        await app.send_message(user_id[0], msg)
-                    except Exception:
-                        pass
+        users = content_collection.distinct("uploader_id")
+        for user_id in users:
+            try:
+                await app.send_message(user_id, msg)
+            except Exception:
+                pass
         await message.reply_text("Broadcast sent!")
         await log_event(f"Broadcast sent by {message.from_user.id}: {msg}")
     except Exception as e:
@@ -249,7 +261,6 @@ async def broadcast(client, message):
 
 # Start bot
 async def main():
-    await init_db()
     await app.start()
     await log_event("Bot started!")
     await app.run()
