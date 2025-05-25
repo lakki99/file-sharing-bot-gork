@@ -5,10 +5,13 @@ from pymongo import MongoClient
 from dotenv import load_dotenv
 
 load_dotenv()
-DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID"))
+DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
 SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
 MONGO_URL = os.getenv("MONGO_URL")
+
+if not MONGO_URL:
+    raise ValueError("MONGO_URL is not set in .env or Heroku config vars!")
 
 mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["file_sharing_bot"]
