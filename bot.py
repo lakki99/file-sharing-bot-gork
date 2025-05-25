@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
-ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]  # Safely convert to integers
+ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
 DOMAIN = os.getenv("DOMAIN", "https://your-bot-name.herokuapp.com")
@@ -23,21 +23,27 @@ MONGO_URL = os.getenv("MONGO_URL")
 
 # Validate critical environment variables
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is not set in .env or Heroku config vars!")
+    raise ValueError("BOT_TOKEN is not set or invalid in .env or Heroku config vars! Get it from @BotFather.")
 if not MONGO_URL:
-    raise ValueError("MONGO_URL is not set in .env or Heroku config vars!")
+    raise ValueError("MONGO_URL is not set in .env or Heroku config vars! Check MongoDB Atlas.")
 if not ADMIN_IDS:
     print("Warning: ADMIN_IDS is empty or invalid. No admins configured.")
 if not LOG_CHANNEL_ID or not DB_CHANNEL_ID:
     print("Warning: LOG_CHANNEL_ID or DB_CHANNEL_ID is invalid. Logs or DB channel may not work.")
 
 # Initialize Pyrogram client
-app = Client("file_sharing_bot", bot_token=BOT_TOKEN)
+try:
+    app = Client("file_sharing_bot", bot_token=BOT_TOKEN)
+except Exception as e:
+    raise ValueError(f"Failed to initialize Pyrogram client: {e}. Check BOT_TOKEN.")
 
 # Initialize MongoDB client
-mongo_client = MongoClient(MONGO_URL)
-db = mongo_client["file_sharing_bot"]
-content_collection = db["content"]
+try:
+    mongo_client = MongoClient(MONGO_URL)
+    db = mongo_client["file_sharing_bot"]
+    content_collection = db["content"]
+except Exception as e:
+    raise ValueError(f"Failed to connect to MongoDB: {e}. Check MONGO_URL.")
 
 # Generate random shortlink (e.g., abc123)
 def generate_shortlink():
@@ -98,7 +104,6 @@ async def link_command(client, message):
         await log_event(f"Non-admin {user_id} tried to use /link.")
         return
 
-    # Forward content to database channel
     try:
         db_message = await message.forward(DB_CHANNEL_ID)
         shortlink = generate_shortlink()
@@ -142,7 +147,6 @@ async def batch_command(client, message):
             await message.reply_text("First ID must be less than last ID!")
             return
 
-        # Forward messages in range to database channel
         shortlink = generate_shortlink()
         bot_link = f"{DOMAIN}/{shortlink}"
         shortener_link = create_shortener_link(bot_link)
@@ -277,9 +281,14 @@ async def broadcast(client, message):
 
 # Start bot
 async def main():
-    await app.start()
-    await log_event("Bot started!")
-    await app.run()
+    try:
+        await app.start()
+        await log_event("Bot started!")
+        await app.run()
+    except Exception as e:
+        print(f"Failed to start bot: {e}")
+        await log_event(f"Bot failed to start: {e}")
+        raise
 
 if __name__ == "__main__":
     asyncio.run(main())
