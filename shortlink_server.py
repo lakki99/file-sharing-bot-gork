@@ -1,19 +1,55 @@
 from aiohttp import web
-import aiosqlite
 import requests
+import os
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+load_dotenv()
+DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID"))
+SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
+SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
+MONGO_URL = os.getenv("MONGO_URL")
+
+mongo_client = MongoClient(MONGO_URL)
+db = mongo_client["file_sharing_bot"]
+content_collection = db["content"]
+
+def create_shortener_link(long_url):
+    try:
+        if SHORTENER_SERVICE == "rebrandly":
+            url = "https://api.rebrandly.com/v1/links"
+            headers = {"Authorization": f"Bearer {SHORTENER_API_KEY}", "Content-Type": "application/json"}
+            data = {"destination": long_url}
+            response = requests.post(url, json=data, headers=headers)
+            return response.json().get("shortUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "shortio":
+            url = f"https://api.short.io/links"
+            headers = {"Authorization": SHORTENER_API_KEY, "Content-Type": "application/json"}
+            data = {"domain": "yourdomain.short.io", "originalURL": long_url}
+            response = requests.post(url, json=data, headers=headers)
+            return response.json().get("shortURL", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "cuttly":
+            url = f"https://cutt.ly/api/api.php?key={SHORTENER_API_KEY}&short={long_url}"
+            response = requests.get(url)
+            return response.json().get("url", {}).get("shortLink", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "tinyurl":
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}").text
+        elif SHORTENER_SERVICE == "rbgy":
+            return requests.get(f"https://rb.gy/api/shorten?url={long_url}").text
+        else:
+            return long_url
+    except Exception:
+        return long_url
 
 async def serve_link(request):
     shortlink = request.match_info['shortlink']
-    async with aiosqlite.connect("database.db") as db:
-        async with db.execute("SELECT message_id, batch_first_id, batch_last_id, is_batch FROM content WHERE shortlink = ?", (shortlink,)) as cursor:
-            row = await cursor.fetchone()
-            if row:
-                message_id, first_id, last_id, is_batch = row
-                bot_link = f"https://t.me/c/{str(DB_CHANNEL_ID)[4:]}/{message_id}" if not is_batch else f"https://t.me/c/{str(DB_CHANNEL_ID)[4:]}/{first_id}-{last_id}"
-                tinyurl_link = requests.get(f"https://tinyurl.com/api-create.php?url={bot_link}").text
-                raise web.HTTPFound(tinyurl_link)  # Redirect to TinyURL
-            else:
-                return web.Response(text="Invalid shortlink!", status=404)
+    item = content_collection.find_one({"shortlink": shortlink})
+    if item:
+        bot_link = f"https://t.me/c/{str(DB_CHANNEL_ID)[4:]}/{item['message_id']}" if not item["is_batch"] else f"https://t.me/c/{str(DB_CHANNEL_ID)[4:]}/{item['batch_first_id']}-{item['batch_last_id']}"
+        shortener_link = create_shortener_link(bot_link)
+        raise web.HTTPFound(shortener_link)
+    else:
+        return web.Response(text="Invalid shortlink!", status=404)
 
 app = web.Application()
 app.router.add_get("/{shortlink}", serve_link)
