@@ -12,13 +12,24 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [int(id) for id in os.getenv("ADMIN_IDS").split(",")]
-LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))
-DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID"))
-DOMAIN = os.getenv("DOMAIN")
+ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
+ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]  # Safely convert to integers
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
+DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
+DOMAIN = os.getenv("DOMAIN", "https://your-bot-name.herokuapp.com")
 SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
 MONGO_URL = os.getenv("MONGO_URL")
+
+# Validate critical environment variables
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN is not set in .env or Heroku config vars!")
+if not MONGO_URL:
+    raise ValueError("MONGO_URL is not set in .env or Heroku config vars!")
+if not ADMIN_IDS:
+    print("Warning: ADMIN_IDS is empty or invalid. No admins configured.")
+if not LOG_CHANNEL_ID or not DB_CHANNEL_ID:
+    print("Warning: LOG_CHANNEL_ID or DB_CHANNEL_ID is invalid. Logs or DB channel may not work.")
 
 # Initialize Pyrogram client
 app = Client("file_sharing_bot", bot_token=BOT_TOKEN)
@@ -67,7 +78,11 @@ def is_admin(user_id):
 
 # Log to channel
 async def log_event(message):
-    await app.send_message(LOG_CHANNEL_ID, message)
+    if LOG_CHANNEL_ID:
+        try:
+            await app.send_message(LOG_CHANNEL_ID, message)
+        except Exception as e:
+            print(f"Error logging to channel: {e}")
 
 # Start command
 @app.on_message(filters.command("start"))
@@ -178,7 +193,8 @@ async def list_content(client, message):
         await message.reply_text("Admins only!")
         return
     items = content_collection.find()
-    if not items.count():
+    count = content_collection.count_documents({})
+    if count == 0:
         await message.reply_text("No content stored!")
         return
     response = "Stored Content:\n"
