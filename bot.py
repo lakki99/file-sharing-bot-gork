@@ -19,9 +19,9 @@ ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
 DOMAIN = os.getenv("DOMAIN", "https://file-sharing-bot-chatgpt.herokuapp.com")
-SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")  # Default to TinyURL
+SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
-SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")  # Custom API URL for shortener
+SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")
 MONGO_URL = os.getenv("MONGO_URL")
 
 # Validate critical environment variables
@@ -66,15 +66,12 @@ def generate_shortlink():
 # Generic shortener link creator
 def create_shortener_link(long_url):
     try:
-        # Custom API-based shortener
         if SHORTENER_API_URL and SHORTENER_API_KEY:
-            # Example: https://api.shortener.com/shorten?key=API_KEY&url=long_url
             api_url = SHORTENER_API_URL.format(api_key=SHORTENER_API_KEY, url=long_url)
             response = requests.get(api_url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 return data.get("shortenedUrl", long_url) or data.get("shortUrl", long_url) or long_url
-        # Predefined shorteners
         elif SHORTENER_SERVICE == "shrinkearn":
             api_url = f"https://shrinkearn.com/api?api_key={SHORTENER_API_KEY}&url={long_url}"
             response = requests.get(api_url, timeout=5)
@@ -91,7 +88,6 @@ def create_shortener_link(long_url):
             return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
         elif SHORTENER_SERVICE == "rbgy":
             return requests.get(f"https://rb.gy/api/shorten?url={long_url}", timeout=5).text
-        # Fallback to TinyURL if all else fails
         return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
     except Exception as e:
         print(f"Error with {SHORTENER_SERVICE}: {e}. Falling back to TinyURL.")
@@ -301,16 +297,6 @@ async def broadcast(client, message):
         await message.reply_text("Usage: /broadcast <message>")
         await log_event(f"Error broadcasting: {e}")
 
-# Start bot
-async def main():
-    try:
-        await app.start()
-        await log_event("Bot started!")
-        await app.run()
-    except Exception as e:
-        print(f"Failed to start bot: {e}")
-        await log_event(f"Bot failed to start: {e}")
-        raise
-
+# Start bot (no asyncio.run, let Pyrogram handle the loop)
 if __name__ == "__main__":
-    asyncio.run(main())
+    app.run()
