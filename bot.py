@@ -12,30 +12,44 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
 ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
-DOMAIN = os.getenv("DOMAIN", "https://your-bot-name.herokuapp.com")
-SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
+DOMAIN = os.getenv("DOMAIN", "https://file-sharing-bot-chatgpt.herokuapp.com")
+SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")  # Default to TinyURL
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
+SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")  # Custom API URL for shortener
 MONGO_URL = os.getenv("MONGO_URL")
 
 # Validate critical environment variables
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN is not set or invalid in .env or Heroku config vars! Get it from @BotFather.")
+    raise ValueError("BOT_TOKEN is not set! Get it from @BotFather.")
+if not API_ID or not API_HASH:
+    raise ValueError("API_ID or API_HASH is not set! Get them from my.telegram.org.")
 if not MONGO_URL:
-    raise ValueError("MONGO_URL is not set in .env or Heroku config vars! Check MongoDB Atlas.")
+    raise ValueError("MONGO_URL is not set! Check MongoDB Atlas.")
 if not ADMIN_IDS:
-    print("Warning: ADMIN_IDS is empty or invalid. No admins configured.")
+    print("Warning: ADMIN_IDS is empty. No admins configured.")
 if not LOG_CHANNEL_ID or not DB_CHANNEL_ID:
-    print("Warning: LOG_CHANNEL_ID or DB_CHANNEL_ID is invalid. Logs or DB channel may not work.")
+    print("Warning: LOG_CHANNEL_ID or DB_CHANNEL_ID is invalid.")
+if not SHORTENER_API_KEY and SHORTENER_SERVICE not in ["tinyurl", "rbgy"]:
+    print(f"Warning: {SHORTENER_SERVICE} may require SHORTENER_API_KEY.")
+if SHORTENER_API_URL:
+    print(f"Using custom SHORTENER_API_URL: {SHORTENER_API_URL}")
 
 # Initialize Pyrogram client
 try:
-    app = Client("file_sharing_bot", bot_token=BOT_TOKEN)
+    app = Client(
+        "file_sharing_bot",
+        api_id=int(API_ID),
+        api_hash=API_HASH,
+        bot_token=BOT_TOKEN
+    )
 except Exception as e:
-    raise ValueError(f"Failed to initialize Pyrogram client: {e}. Check BOT_TOKEN.")
+    raise ValueError(f"Failed to initialize Pyrogram client: {e}. Check API_ID, API_HASH, BOT_TOKEN.")
 
 # Initialize MongoDB client
 try:
@@ -49,34 +63,42 @@ except Exception as e:
 def generate_shortlink():
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
-# Generate shortener link based on service
+# Generic shortener link creator
 def create_shortener_link(long_url):
     try:
-        if SHORTENER_SERVICE == "rebrandly":
-            url = "https://api.rebrandly.com/v1/links"
-            headers = {"Authorization": f"Bearer {SHORTENER_API_KEY}", "Content-Type": "application/json"}
-            data = {"destination": long_url}
-            response = requests.post(url, json=data, headers=headers)
-            return response.json().get("shortUrl", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "shortio":
-            url = f"https://api.short.io/links"
-            headers = {"Authorization": SHORTENER_API_KEY, "Content-Type": "application/json"}
-            data = {"domain": "yourdomain.short.io", "originalURL": long_url}
-            response = requests.post(url, json=data, headers=headers)
-            return response.json().get("shortURL", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "cuttly":
-            url = f"https://cutt.ly/api/api.php?key={SHORTENER_API_KEY}&short={long_url}"
-            response = requests.get(url)
-            return response.json().get("url", {}).get("shortLink", long_url) if response.status_code == 200 else long_url
+        # Custom API-based shortener
+        if SHORTENER_API_URL and SHORTENER_API_KEY:
+            # Example: https://api.shortener.com/shorten?key=API_KEY&url=long_url
+            api_url = SHORTENER_API_URL.format(api_key=SHORTENER_API_KEY, url=long_url)
+            response = requests.get(api_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("shortenedUrl", long_url) or data.get("shortUrl", long_url) or long_url
+        # Predefined shorteners
+        elif SHORTENER_SERVICE == "shrinkearn":
+            api_url = f"https://shrinkearn.com/api?api_key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "adshrink":
+            api_url = f"https://adshrink.it/api?api_key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "bcvc":
+            api_url = f"https://bc.vc/api.php?key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("short_url", long_url) if response.status_code == 200 else long_url
         elif SHORTENER_SERVICE == "tinyurl":
-            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}").text
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
         elif SHORTENER_SERVICE == "rbgy":
-            return requests.get(f"https://rb.gy/api/shorten?url={long_url}").text
-        else:
-            return long_url
+            return requests.get(f"https://rb.gy/api/shorten?url={long_url}", timeout=5).text
+        # Fallback to TinyURL if all else fails
+        return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
     except Exception as e:
-        print(f"Error with {SHORTENER_SERVICE}: {e}")
-        return long_url
+        print(f"Error with {SHORTENER_SERVICE}: {e}. Falling back to TinyURL.")
+        try:
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
+        except Exception:
+            return long_url
 
 # Check if user is admin
 def is_admin(user_id):
@@ -230,7 +252,7 @@ async def add_user(client, message):
         if user_id not in ADMIN_IDS:
             ADMIN_IDS.append(user_id)
             with open(".env", "w") as f:
-                f.write(f"BOT_TOKEN={BOT_TOKEN}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nMONGO_URL={MONGO_URL}")
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} added as admin!")
             await log_event(f"User {user_id} added as admin by {message.from_user.id}")
         else:
@@ -250,7 +272,7 @@ async def remove_user(client, message):
         if user_id in ADMIN_IDS:
             ADMIN_IDS.remove(user_id)
             with open(".env", "w") as f:
-                f.write(f"BOT_TOKEN={BOT_TOKEN}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nMONGO_URL={MONGO_URL}")
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} removed from admins!")
             await log_event(f"User {user_id} removed from admins by {message.from_user.id}")
         else:
