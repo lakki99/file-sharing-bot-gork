@@ -19,9 +19,9 @@ ADMIN_IDS = [int(id) for id in ADMIN_IDS if id.strip().isdigit()]
 LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID", "0"))
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
 DOMAIN = os.getenv("DOMAIN", "https://file-sharing-bot-chatgpt.herokuapp.com")
-SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
-SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
-SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")
+SHORTENER = os.getenv("SHORTENER", "False").lower() == "true"  # True/False like Lakki-File-Store
+SHORTENER_API = os.getenv("SHORTENER_API", "")  # API key like Lakki-File-Store
+SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")  # Custom API URL
 MONGO_URL = os.getenv("MONGO_URL")
 
 # Validate critical environment variables
@@ -35,8 +35,8 @@ if not ADMIN_IDS:
     print("Warning: ADMIN_IDS is empty. No admins configured.")
 if not LOG_CHANNEL_ID or not DB_CHANNEL_ID:
     print("Warning: LOG_CHANNEL_ID or DB_CHANNEL_ID is invalid.")
-if not SHORTENER_API_KEY and SHORTENER_SERVICE not in ["tinyurl", "rbgy"]:
-    print(f"Warning: {SHORTENER_SERVICE} may require SHORTENER_API_KEY.")
+if SHORTENER and not SHORTENER_API:
+    print("Warning: SHORTENER is True but SHORTENER_API is not set.")
 if SHORTENER_API_URL:
     print(f"Using custom SHORTENER_API_URL: {SHORTENER_API_URL}")
 
@@ -63,34 +63,25 @@ except Exception as e:
 def generate_shortlink():
     return ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
 
-# Generic shortener link creator
+# Shortener link creator (inspired by Lakki-File-Store)
 def create_shortener_link(long_url):
+    if not SHORTENER or not SHORTENER_API:
+        return long_url  # Return original link if shortener is disabled
     try:
-        if SHORTENER_API_URL and SHORTENER_API_KEY:
-            api_url = SHORTENER_API_URL.format(api_key=SHORTENER_API_KEY, url=long_url)
+        if SHORTENER_API_URL:
+            # Custom API URL (e.g., https://api.shortener.com/shorten?key={api_key}&url={url})
+            api_url = SHORTENER_API_URL.format(api_key=SHORTENER_API, url=long_url)
             response = requests.get(api_url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
                 return data.get("shortenedUrl", long_url) or data.get("shortUrl", long_url) or long_url
-        elif SHORTENER_SERVICE == "shrinkearn":
-            api_url = f"https://shrinkearn.com/api?api_key={SHORTENER_API_KEY}&url={long_url}"
+        else:
+            # Default to a paid shortener (e.g., short.gy like Lakki-File-Store)
+            api_url = f"https://short.gy/api?api={SHORTENER_API}&url={long_url}"
             response = requests.get(api_url, timeout=5)
             return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "adshrink":
-            api_url = f"https://adshrink.it/api?api_key={SHORTENER_API_KEY}&url={long_url}"
-            response = requests.get(api_url, timeout=5)
-            return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "bcvc":
-            api_url = f"https://bc.vc/api.php?key={SHORTENER_API_KEY}&url={long_url}"
-            response = requests.get(api_url, timeout=5)
-            return response.json().get("short_url", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "tinyurl":
-            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
-        elif SHORTENER_SERVICE == "rbgy":
-            return requests.get(f"https://rb.gy/api/shorten?url={long_url}", timeout=5).text
-        return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
     except Exception as e:
-        print(f"Error with {SHORTENER_SERVICE}: {e}. Falling back to TinyURL.")
+        print(f"Error with shortener: {e}. Falling back to TinyURL.")
         try:
             return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
         except Exception:
@@ -248,7 +239,7 @@ async def add_user(client, message):
         if user_id not in ADMIN_IDS:
             ADMIN_IDS.append(user_id)
             with open(".env", "w") as f:
-                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER={SHORTENER}\nSHORTENER_API={SHORTENER_API}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} added as admin!")
             await log_event(f"User {user_id} added as admin by {message.from_user.id}")
         else:
@@ -268,7 +259,7 @@ async def remove_user(client, message):
         if user_id in ADMIN_IDS:
             ADMIN_IDS.remove(user_id)
             with open(".env", "w") as f:
-                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER_SERVICE={SHORTENER_SERVICE}\nSHORTENER_API_KEY={SHORTENER_API_KEY}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
+                f.write(f"BOT_TOKEN={BOT_TOKEN}\nAPI_ID={API_ID}\nAPI_HASH={API_HASH}\nADMIN_IDS={','.join(map(str, ADMIN_IDS))}\nLOG_CHANNEL_ID={LOG_CHANNEL_ID}\nDB_CHANNEL_ID={DB_CHANNEL_ID}\nDOMAIN={DOMAIN}\nSHORTENER={SHORTENER}\nSHORTENER_API={SHORTENER_API}\nSHORTENER_API_URL={SHORTENER_API_URL}\nMONGO_URL={MONGO_URL}")
             await message.reply_text(f"User {user_id} removed from admins!")
             await log_event(f"User {user_id} removed from admins by {message.from_user.id}")
         else:
