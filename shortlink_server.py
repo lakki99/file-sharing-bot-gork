@@ -8,10 +8,13 @@ load_dotenv()
 DB_CHANNEL_ID = int(os.getenv("DB_CHANNEL_ID", "0"))
 SHORTENER_SERVICE = os.getenv("SHORTENER_SERVICE", "tinyurl")
 SHORTENER_API_KEY = os.getenv("SHORTENER_API_KEY", "")
+SHORTENER_API_URL = os.getenv("SHORTENER_API_URL", "")
 MONGO_URL = os.getenv("MONGO_URL")
 
 if not MONGO_URL:
-    raise ValueError("MONGO_URL is not set in .env or Heroku config vars!")
+    raise ValueError("MONGO_URL is not set in Heroku config vars!")
+if SHORTENER_API_URL:
+    print(f"Using custom SHORTENER_API_URL: {SHORTENER_API_URL}")
 
 mongo_client = MongoClient(MONGO_URL)
 db = mongo_client["file_sharing_bot"]
@@ -19,30 +22,35 @@ content_collection = db["content"]
 
 def create_shortener_link(long_url):
     try:
-        if SHORTENER_SERVICE == "rebrandly":
-            url = "https://api.rebrandly.com/v1/links"
-            headers = {"Authorization": f"Bearer {SHORTENER_API_KEY}", "Content-Type": "application/json"}
-            data = {"destination": long_url}
-            response = requests.post(url, json=data, headers=headers)
-            return response.json().get("shortUrl", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "shortio":
-            url = f"https://api.short.io/links"
-            headers = {"Authorization": SHORTENER_API_KEY, "Content-Type": "application/json"}
-            data = {"domain": "yourdomain.short.io", "originalURL": long_url}
-            response = requests.post(url, json=data, headers=headers)
-            return response.json().get("shortURL", long_url) if response.status_code == 200 else long_url
-        elif SHORTENER_SERVICE == "cuttly":
-            url = f"https://cutt.ly/api/api.php?key={SHORTENER_API_KEY}&short={long_url}"
-            response = requests.get(url)
-            return response.json().get("url", {}).get("shortLink", long_url) if response.status_code == 200 else long_url
+        if SHORTENER_API_URL and SHORTENER_API_KEY:
+            api_url = SHORTENER_API_URL.format(api_key=SHORTENER_API_KEY, url=long_url)
+            response = requests.get(api_url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("shortenedUrl", long_url) or data.get("shortUrl", long_url) or long_url
+        elif SHORTENER_SERVICE == "shrinkearn":
+            api_url = f"https://shrinkearn.com/api?api_key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "adshrink":
+            api_url = f"https://adshrink.it/api?api_key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("shortenedUrl", long_url) if response.status_code == 200 else long_url
+        elif SHORTENER_SERVICE == "bcvc":
+            api_url = f"https://bc.vc/api.php?key={SHORTENER_API_KEY}&url={long_url}"
+            response = requests.get(api_url, timeout=5)
+            return response.json().get("short_url", long_url) if response.status_code == 200 else long_url
         elif SHORTENER_SERVICE == "tinyurl":
-            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}").text
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
         elif SHORTENER_SERVICE == "rbgy":
-            return requests.get(f"https://rb.gy/api/shorten?url={long_url}").text
-        else:
+            return requests.get(f"https://rb.gy/api/shorten?url={long_url}", timeout=5).text
+        return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
+    except Exception as e:
+        print(f"Error with {SHORTENER_SERVICE}: {e}. Falling back to TinyURL.")
+        try:
+            return requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=5).text
+        except Exception:
             return long_url
-    except Exception:
-        return long_url
 
 async def serve_link(request):
     shortlink = request.match_info['shortlink']
